@@ -10,6 +10,7 @@ import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_TOKEN = os.getenv("APP_TOKEN")
 openai_api_key = os.getenv("OPENAI_API_KEY")
+openai.api_key = openai_api_key
 
 app = AsyncApp(token=BOT_TOKEN)
 
