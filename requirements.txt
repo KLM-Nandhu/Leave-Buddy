@@ -4,3 +4,4 @@ slack_bolt
 openai
 openpyxl
 requests
+aiohttp
