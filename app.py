@@ -17,7 +17,7 @@ app = AsyncApp(token=BOT_TOKEN)
 # Load Excel data from a file
 def load_data():
     try:
-        df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory
+        df = pd.read_excel("holidays.xlsx")  # Ensure the file is in the same directory
         df['DATE'] = pd.to_datetime(df['DATE'], format='%Y-%m-%d')  # Ensure date format is YYYY-MM-DD
         return df
     except Exception as e:
