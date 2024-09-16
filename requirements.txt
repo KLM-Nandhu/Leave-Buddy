@@ -1,0 +1,6 @@
+streamlit
+pandas
+slack_bolt
+openai
+openpyxl
+requests
