@@ -1,7 +1,5 @@
 streamlit
 pandas
-slack_bolt
-openai
-openpyxl
-requests
-aiohttp
+openai==0.28
+slack-bolt
+aiohttp  # Required for asynchronous operations in slack-bolt
