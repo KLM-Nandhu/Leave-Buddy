@@ -5,8 +5,6 @@ from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import openai
 from datetime import datetime
 import asyncio
-import requests
-from io import BytesIO
 
 # Slack and OpenAI setup
 BOT_TOKEN = st.secrets["BOT_TOKEN"]
@@ -16,27 +14,24 @@ openai.api_key = st.secrets["OPENAI_API_KEY"]
 app = AsyncApp(token=BOT_TOKEN)
 
 # Load Excel data from the local file
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+@st.cache(ttl=3600)  # Cache for 1 hour
 def load_data():
-    df = pd.read_excel("./holidays.xlsx")  # Assumed file name is 'holidays.xlsx'
+    df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory as this script
     df['DATE'] = pd.to_datetime(df['DATE'], format='%d-%m-%Y')
     return df
 
 df = load_data()
 
 async def query_gpt(prompt):
-    response = await openai.ChatCompletion.create(
-        model="gpt-3.5-turbo",
-        messages=[
-            {"role": "system", "content": "You are a helpful assistant that answers questions about Nandhakumar's holiday schedule."},
-            {"role": "user", "content": prompt}
-        ]
+    response = await openai.Completion.create(
+        model="gpt-3.5-turbo",  # Specify the appropriate model here
+        prompt=prompt,
+        max_tokens=150
     )
-    return response.choices[0].message['content']
+    return response.choices[0].text.strip()
 
 async def get_holiday_info(query):
     today = datetime.now().date()
-    
     gpt_interpretation = await query_gpt(f"Interpret this query about Nandhakumar's holiday schedule: '{query}'. Extract any dates or festivals mentioned.")
     
     if "date" in gpt_interpretation.lower():
@@ -82,6 +77,10 @@ async def handle_message(event, say):
     text = event.get("text", "")
     response = await get_holiday_info(text)
     await say(response)
+
+@app.event("app_home_opened")
+async def handle_app_home_opened_events(body, logger):
+    logger.info(body)
 
 async def start_bot():
     handler = AsyncSocketModeHandler(app, APP_TOKEN)
