@@ -9,7 +9,7 @@ import os
 # Slack and OpenAI setup
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_TOKEN = os.getenv("APP_TOKEN")
-openai.api_key = os.getenv("OPENAI_API_KEY")
+openai_api_key = os.getenv("OPENAI_API_KEY")
 
 app = AsyncApp(token=BOT_TOKEN)
 
