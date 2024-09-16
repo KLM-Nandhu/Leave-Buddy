@@ -12,22 +12,20 @@ from io import BytesIO
 BOT_TOKEN = st.secrets["BOT_TOKEN"]
 APP_TOKEN = st.secrets["APP_TOKEN"]
 openai.api_key = st.secrets["OPENAI_API_KEY"]
-GITHUB_RAW_URL = st.secrets["GITHUB_RAW_URL"]
 
 app = AsyncApp(token=BOT_TOKEN)
 
-# Load Excel data from GitHub
+# Load Excel data from the local file
 @st.cache_data(ttl=3600)  # Cache for 1 hour
 def load_data():
-    response = requests.get(GITHUB_RAW_URL)
-    df = pd.read_excel(BytesIO(response.content))
+    df = pd.read_excel("./holidays.xlsx")  # Assumed file name is 'holidays.xlsx'
     df['DATE'] = pd.to_datetime(df['DATE'], format='%d-%m-%Y')
     return df
 
 df = load_data()
 
 async def query_gpt(prompt):
-    response = await openai.ChatCompletion.acreate(
+    response = await openai.ChatCompletion.create(
         model="gpt-3.5-turbo",
         messages=[
             {"role": "system", "content": "You are a helpful assistant that answers questions about Nandhakumar's holiday schedule."},
