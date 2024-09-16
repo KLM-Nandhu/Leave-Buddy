@@ -10,31 +10,50 @@ import os
 BOT_TOKEN = os.getenv("BOT_TOKEN")
 APP_TOKEN = os.getenv("APP_TOKEN")
 openai_api_key = os.getenv("OPENAI_API_KEY")
-openai.api_key = openai_api_key
+openai.api_key = openai_api_key  # Ensure the API key is set for OpenAI
 
 app = AsyncApp(token=BOT_TOKEN)
 
 # Load Excel data from a file
 def load_data():
-    df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory
-    df['DATE'] = pd.to_datetime(df['DATE'], format='%d-%m-%Y')
-    return df
+    try:
+        df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory
+        df['DATE'] = pd.to_datetime(df['DATE'], format='%Y-%m-%d')  # Ensure date format is YYYY-MM-DD
+        return df
+    except Exception as e:
+        print(f"Error loading data: {e}")
+        return None
 
 df = load_data()
 
 async def query_gpt(prompt):
-    response = await openai.Completion.create(
-        model="gpt-3.5-turbo",
-        prompt=prompt,
-        max_tokens=150
-    )
-    return response.choices[0].text.strip()
+    try:
+        response = await openai.Completion.create(
+            model="gpt-3.5-turbo",
+            prompt=prompt,
+            max_tokens=150
+        )
+        return response.choices[0].text.strip()
+    except Exception as e:
+        return f"Error querying GPT: {e}"
 
 async def get_holiday_info(query):
     today = datetime.now().date()
-    gpt_interpretation = await query_gpt(f"Interpret this query about Nandhakumar's holiday schedule: '{query}'. Extract any dates or festivals mentioned.")
+
+    # GPT interpretation
+    gpt_interpretation = await query_gpt(f"Interpret this query about Nandhakumar's holiday schedule: '{query}'. Extract any dates or festivals mentioned, and if asking about who is on leave today, check today's date: {today}.")
+
+    if "today" in query.lower() or "who is on leave today" in query.lower():
+        # Check for today's holidays
+        today_holidays = df[df['DATE'].dt.date == today]
+        if today_holidays.empty:
+            return "No one is on leave today."
+        else:
+            festivals = ", ".join(today_holidays['FESTIVALS'].dropna())
+            return f"Nandhakumar's leave(s) today: {festivals}" if festivals else "No one is on leave today."
     
-    if "date" in gpt_interpretation.lower():
+    # Handle specific dates mentioned in the query
+    elif "date" in gpt_interpretation.lower():
         date_str = gpt_interpretation.split("date:")[-1].strip().split()[0]
         try:
             query_date = datetime.strptime(date_str, "%Y-%m-%d").date()
@@ -47,8 +66,9 @@ async def get_holiday_info(query):
             festivals = ", ".join(date_record['FESTIVALS'].unique())
             return f"On {query_date}, Nandhakumar has the following holiday(s): {festivals}"
         else:
-            return f"Nandhakumar has no holidays scheduled for {query_date}"
+            return f"Nandhakumar has no holidays scheduled for {query_date}."
     
+    # Handle specific festival queries
     elif "festival" in gpt_interpretation.lower():
         festival = gpt_interpretation.split("festival:")[-1].strip()
         festival_records = df[df['FESTIVALS'].str.contains(festival, case=False, na=False)]
@@ -59,18 +79,10 @@ async def get_holiday_info(query):
                 response += f"{row['DATE'].strftime('%Y-%m-%d')} ({row['DAY']})\n"
             return response
         else:
-            return f"No records found for the festival: {festival} in Nandhakumar's schedule"
-    
-    elif "check holidays" in query.lower():
-        today_holidays = df[df['DATE'].dt.date == today]
-        if today_holidays.empty:
-            return "Nandhakumar has no holidays today."
-        else:
-            festivals = ", ".join(today_holidays['FESTIVALS'])
-            return f"Nandhakumar's holiday(s) today: {festivals}"
+            return f"No records found for the festival: {festival}."
     
     else:
-        return "I'm not sure how to interpret that query. You can ask about specific dates, festivals, or check Nandhakumar's holidays for today."
+        return "I'm not sure how to interpret that query. You can ask about specific dates, festivals, or check who's on leave today."
 
 @app.event("message")
 async def handle_message(event, say):
@@ -87,4 +99,7 @@ async def start_bot():
     await handler.start_async()
 
 if __name__ == "__main__":
-    asyncio.run(start_bot())
+    if df is not None:
+        asyncio.run(start_bot())
+    else:
+        print("Failed to load holiday data. Bot is not starting.")
