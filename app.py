@@ -1,22 +1,21 @@
-import streamlit as st
 import pandas as pd
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
 import openai
 from datetime import datetime
 import asyncio
+import os
 
 # Slack and OpenAI setup
-BOT_TOKEN = st.secrets["BOT_TOKEN"]
-APP_TOKEN = st.secrets["APP_TOKEN"]
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+APP_TOKEN = os.getenv("APP_TOKEN")
+openai.api_key = os.getenv("OPENAI_API_KEY")
 
 app = AsyncApp(token=BOT_TOKEN)
 
-# Load Excel data from the local file
-@st.cache(ttl=3600)  # Cache for 1 hour
+# Load Excel data from a file
 def load_data():
-    df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory as this script
+    df = pd.read_excel("./holidays.xlsx")  # Ensure the file is in the same directory
     df['DATE'] = pd.to_datetime(df['DATE'], format='%d-%m-%Y')
     return df
 
@@ -24,7 +23,7 @@ df = load_data()
 
 async def query_gpt(prompt):
     response = await openai.Completion.create(
-        model="gpt-3.5-turbo",  # Specify the appropriate model here
+        model="gpt-3.5-turbo",
         prompt=prompt,
         max_tokens=150
     )
@@ -86,10 +85,5 @@ async def start_bot():
     handler = AsyncSocketModeHandler(app, APP_TOKEN)
     await handler.start_async()
 
-# Streamlit UI (minimal, since the main interaction is through Slack)
-st.title("Nandhakumar's Holiday Schedule Bot")
-st.write("This bot is running and processing queries about Nandhakumar's holiday schedule via Slack.")
-
-# Run the Slack bot
 if __name__ == "__main__":
     asyncio.run(start_bot())
