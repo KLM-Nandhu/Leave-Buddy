@@ -1,41 +1,45 @@
-import os
+import streamlit as st
+import pandas as pd
 import openai
 from pinecone import Pinecone, ServerlessSpec
-from slack_bolt import App
-from slack_bolt.adapter.flask import SlackRequestHandler
-from flask import Flask, request
+from slack_bolt.async_app import AsyncApp
+from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
+import asyncio
+import time
 import logging
-from datetime import datetime
-from functools import lru_cache
-import pandas as pd
+from threading import Thread
 import traceback
+from slack_sdk.errors import SlackApiError
+from datetime import datetime, timedelta
+from functools import lru_cache
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Load environment variables
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
+# Streamlit app title
+st.title("Leave Buddy - Slack Bot")
 
-# Check if all required environment variables are set
-required_env_vars = ["OPENAI_API_KEY", "PINECONE_API_KEY", "SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"]
-missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
-if missing_vars:
-    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
-
+openai.api_key = st.secrets["OPENAI_API_KEY"]
+PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
+SLACK_BOT_TOKEN = st.secrets["SLACK_BOT_TOKEN"]
+SLACK_APP_TOKEN = st.secrets["SLACK_APP_TOKEN"]
 # Initialize Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index_name = "leave-buddy-index"
 
 # Initialize Slack app
-app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
-handler = SlackRequestHandler(app)
+app = AsyncApp(token=SLACK_BOT_TOKEN)
 
-# Initialize Flask app
-flask_app = Flask(__name__)
+# Create a placeholder for logs
+if 'logs' not in st.session_state:
+    st.session_state.logs = ""
+log_placeholder = st.empty()
+
+# Function to update Streamlit log
+def update_log(message):
+    st.session_state.logs += message + "\n"
+    log_placeholder.text_area("Logs", st.session_state.logs, height=300)
 
 # Cached function to generate embeddings
 @lru_cache(maxsize=1000)
@@ -80,7 +84,7 @@ def upload_to_pinecone(records):
         return False, f"Error uploading data to Pinecone: {str(e)}"
 
 # Function to query Pinecone and format response
-def query_pinecone(query):
+async def query_pinecone(query):
     try:
         index = pc.Index(index_name)
         query_embedding = get_embedding(query)
@@ -97,7 +101,7 @@ def query_pinecone(query):
     return None
 
 # Function to query GPT and generate response
-def query_gpt(query, context):
+async def query_gpt(query, context):
     try:
         today = datetime.now().strftime("%d-%m-%Y")
         
@@ -115,9 +119,9 @@ def query_gpt(query, context):
    Total: [X] days
 5. For presence queries:
    - If leave information is found for the date, respond with:
-     "[Employee Name] is not present on [Date]. Reason: [Leave Reason]"
+     "[Employee Name] is  present on [Date]. Reason: [Leave Reason]"
    - If no leave information is found for the date, respond with:
-     "[Employee Name] is present on [Date]."
+     "[Employee Name] is  not present on [Date]."
 6. IMPORTANT: Absence of leave information in the database means the employee is present.
 7. Only mention leave information if it's explicitly stated in the context.
 8. Limit responses to essential information only.
@@ -125,7 +129,7 @@ def query_gpt(query, context):
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ]
         
-        response = openai.ChatCompletion.create(
+        response = await openai.ChatCompletion.acreate(
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=150,
@@ -138,11 +142,11 @@ def query_gpt(query, context):
         return f"Error: Unable to process the query. Please try again."
 
 # Function to process query and generate response
-def process_query(query):
+async def process_query(query):
     try:
-        context = query_pinecone(query)
+        context = await query_pinecone(query)
         if context:
-            response = query_gpt(query, context)
+            response = await query_gpt(query, context)
         else:
             # If no context is found, assume the employee is present
             employee_name = query.split()[1]  # Extracts the name from "is [name] present today?"
@@ -153,58 +157,83 @@ def process_query(query):
         logger.error(f"Error in process_query: {str(e)}")
         return "I encountered an error while processing your query. Please try again later."
 
-# Slack event handler
+# Enhanced Slack event handler with fixed loading message
 @app.event("message")
-def handle_message(body, say):
+async def handle_message(event, say):
     try:
-        text = body.get("event", {}).get("text", "")
-        user = body.get("event", {}).get("user", "")
-        channel = body.get("event", {}).get("channel", "")
+        text = event.get("text", "")
+        channel = event.get("channel", "")
         
         # Send initial processing message
-        processing_message = say("Processing your request... :hourglass_flowing_sand:")
+        processing_message = await app.client.chat_postMessage(
+            channel=channel,
+            text="Processing your request... :hourglass_flowing_sand:"
+        )
+        
+        # Get the timestamp of the processing message
+        processing_ts = processing_message['ts']
         
         # Process the query
-        response = process_query(text)
+        response = await process_query(text)
         
         # Update the processing message with the final response
-        app.client.chat_update(
-            channel=channel,
-            ts=processing_message['ts'],
-            text=f"<@{user}> {response}"
-        )
+        try:
+            await app.client.chat_update(
+                channel=channel,
+                ts=processing_ts,
+                text=response
+            )
+        except SlackApiError as e:
+            logger.error(f"Error updating message: {e}")
+            # If update fails, send a new message
+            await say(response)
+        
     except Exception as e:
         logger.error(f"Error in handle_message: {str(e)}")
-        say("I'm sorry, I encountered an error. Please try again.")
+        await say("I'm sorry, I encountered an error. Please try again.")
 
-# Flask route for Slack events
-@flask_app.route("/slack/events", methods=["POST"])
-def slack_events():
-    return handler.handle(request)
+# Function to run the Slack bot
+def run_slack_bot():
+    async def start_bot():
+        handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
+        await handler.start_async()
 
-# Function to update leave data
-def update_leave_data(file_path):
-    try:
-        df = pd.read_excel(file_path)
-        df['DATE'] = pd.to_datetime(df['DATE']).dt.strftime('%d-%m-%Y')
-        
-        print("Creating embeddings...")
-        embeddings = create_embeddings(df)
-        print("Uploading to Pinecone...")
-        success, message = upload_to_pinecone(embeddings)
-        print(message)
+    asyncio.run(start_bot())
+
+# Sidebar for optional data upload
+st.sidebar.header("Update Leave Data")
+uploaded_file = st.sidebar.file_uploader("Upload Excel file", type="xlsx")
+if uploaded_file is not None:
+    df = pd.read_excel(uploaded_file)
+    df['DATE'] = pd.to_datetime(df['DATE']).dt.strftime('%d-%m-%Y')
+    
+    st.sidebar.write("Uploaded Data Preview:")
+    st.sidebar.dataframe(df.head())
+    
+    if st.sidebar.button("Process and Upload Data"):
+        with st.spinner("Processing and uploading data..."):
+            embeddings = create_embeddings(df)
+            success, message = upload_to_pinecone(embeddings)
+        st.sidebar.write(message)
         if success:
-            print("Data processed and uploaded successfully!")
-        else:
-            print("Failed to upload data.")
-    except Exception as e:
-        print(f"Error updating leave data: {str(e)}")
+            st.session_state['data_uploaded'] = True
+            st.sidebar.success("Data processed and uploaded successfully!")
 
-# Health check route
-@flask_app.route("/", methods=["GET"])
-def health_check():
-    return "Leave Buddy is running!"
+# Main interface for starting the Slack bot
+st.header("Slack Bot Controls")
+if 'bot_running' not in st.session_state:
+    st.session_state.bot_running = False
 
-# Run the Flask app
+if st.button("Start Slack Bot", disabled=st.session_state.bot_running):
+    st.session_state.bot_running = True
+    st.write("Starting Slack bot...")
+    thread = Thread(target=run_slack_bot)
+    thread.start()
+    st.success("Slack bot is running! You can now ask questions in your Slack channel.")
+
+if st.session_state.bot_running:
+    st.write("Slack bot is active and ready to answer queries.")
+
+# Run the Streamlit app
 if __name__ == "__main__":
-    flask_app.run(debug=True)
+    st.write("Leave Buddy is ready to use!")
