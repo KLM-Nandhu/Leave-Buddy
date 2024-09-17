@@ -1,5 +1,4 @@
-import streamlit as st
-import pandas as pd
+import os
 import openai
 from pinecone import Pinecone, ServerlessSpec
 from slack_bolt.async_app import AsyncApp
@@ -12,19 +11,23 @@ import traceback
 from slack_sdk.errors import SlackApiError
 from datetime import datetime, timedelta
 from functools import lru_cache
+import pandas as pd
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Streamlit app title
-st.title("Leave Buddy - Slack Bot")
+# Load environment variables
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
 
-# Load environment variables (replace with your actual keys)
-openai.api_key = "your-openai-api-key"
-PINECONE_API_KEY = "your-pinecone-api-key"
-SLACK_BOT_TOKEN = "your-slack-bot-token"
-SLACK_APP_TOKEN = "your-slack-app-token"
+# Check if all required environment variables are set
+required_env_vars = ["OPENAI_API_KEY", "PINECONE_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]
+missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
+if missing_vars:
+    raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
 
 # Initialize Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -32,16 +35,6 @@ index_name = "leave-buddy-index"
 
 # Initialize Slack app
 app = AsyncApp(token=SLACK_BOT_TOKEN)
-
-# Create a placeholder for logs
-if 'logs' not in st.session_state:
-    st.session_state.logs = ""
-log_placeholder = st.empty()
-
-# Function to update Streamlit log
-def update_log(message):
-    st.session_state.logs += message + "\n"
-    log_placeholder.text_area("Logs", st.session_state.logs, height=300)
 
 # Cached function to generate embeddings
 @lru_cache(maxsize=1000)
@@ -111,22 +104,23 @@ async def query_gpt(query, context):
             {"role": "system", "content": f"""You are LeaveBuddy, an efficient AI assistant for employee leave information. Today is {today}. Follow these rules strictly:
 
 1. Provide concise, direct answers about employee leaves.
-2. Always mention specific dates in your responses.
-3. For queries about total leave days, use this format:
+2. provide processing message for every request of the user.
+3. Always mention specific dates in your responses.
+4. For queries about total leave days, use this format:
    [Employee Name] has [X] total leave days in [Year]:
    - [Date]: [Reason]
    - [Date]: [Reason]
    ...
    Total: [X] days
-4. For presence queries:
+5. For presence queries:
    - If leave information is found for the date, respond with:
-     "[Employee Name] is not present on [Date]. Reason: [Leave Reason]"
+     "[Employee Name] is  present on [Date]. Reason: [Leave Reason]"
    - If no leave information is found for the date, respond with:
-     "[Employee Name] is present on [Date]."
-5. IMPORTANT: Absence of leave information in the database means the employee is present.
-6. Only mention leave information if it's explicitly stated in the context.
-7. Limit responses to essential information only.
-8. Do not add any explanations or pleasantries."""},
+     "[Employee Name] is  not present on [Date]."
+6. IMPORTANT: Absence of leave information in the database means the employee is present.
+7. Only mention leave information if it's explicitly stated in the context.
+8. Limit responses to essential information only.
+9. Do not add any explanations or pleasantries."""},
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ]
         
@@ -201,40 +195,33 @@ def run_slack_bot():
 
     asyncio.run(start_bot())
 
-# Sidebar for optional data upload
-st.sidebar.header("Update Leave Data")
-uploaded_file = st.sidebar.file_uploader("Upload Excel file", type="xlsx")
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
-    df['DATE'] = pd.to_datetime(df['DATE']).dt.strftime('%d-%m-%Y')
-    
-    st.sidebar.write("Uploaded Data Preview:")
-    st.sidebar.dataframe(df.head())
-    
-    if st.sidebar.button("Process and Upload Data"):
-        with st.spinner("Processing and uploading data..."):
-            embeddings = create_embeddings(df)
-            success, message = upload_to_pinecone(embeddings)
-        st.sidebar.write(message)
+# Main function to run the app
+async def main():
+    handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
+    await handler.start_async()
+
+# Function to update leave data (previously handled by Streamlit)
+def update_leave_data(file_path):
+    try:
+        df = pd.read_excel(file_path)
+        df['DATE'] = pd.to_datetime(df['DATE']).dt.strftime('%d-%m-%Y')
+        
+        print("Creating embeddings...")
+        embeddings = create_embeddings(df)
+        print("Uploading to Pinecone...")
+        success, message = upload_to_pinecone(embeddings)
+        print(message)
         if success:
-            st.session_state['data_uploaded'] = True
-            st.sidebar.success("Data processed and uploaded successfully!")
+            print("Data processed and uploaded successfully!")
+        else:
+            print("Failed to upload data.")
+    except Exception as e:
+        print(f"Error updating leave data: {str(e)}")
 
-# Main interface for starting the Slack bot
-st.header("Slack Bot Controls")
-if 'bot_running' not in st.session_state:
-    st.session_state.bot_running = False
-
-if st.button("Start Slack Bot", disabled=st.session_state.bot_running):
-    st.session_state.bot_running = True
-    st.write("Starting Slack bot...")
-    thread = Thread(target=run_slack_bot)
-    thread.start()
-    st.success("Slack bot is running! You can now ask questions in your Slack channel.")
-
-if st.session_state.bot_running:
-    st.write("Slack bot is active and ready to answer queries.")
-
-# Run the Streamlit app
+# Run the app
 if __name__ == "__main__":
-    st.write("Leave Buddy is ready to use!")
+    # Uncomment the following line and provide the file path to update leave data
+    # update_leave_data("path_to_your_excel_file.xlsx")
+    
+    print("Starting Slack bot...")
+    asyncio.run(main())
