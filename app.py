@@ -191,7 +191,9 @@ def run_slack_bot():
         handler = AsyncSocketModeHandler(slack_app, SLACK_APP_TOKEN)
         await handler.start_async()
 
-    asyncio.run(start_bot())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_bot())
 
 # Flask route for health check
 @app.route('/')
