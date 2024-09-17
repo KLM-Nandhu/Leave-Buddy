@@ -123,7 +123,7 @@ async def query_gpt(query, context):
         ]
         
         response = await openai.ChatCompletion.acreate(
-            model="gpt-4o-mini",
+            model="gpt-4-0613",
             messages=messages,
             max_tokens=150,
             n=1,
@@ -191,14 +191,32 @@ def run_slack_bot():
         handler = AsyncSocketModeHandler(slack_app, SLACK_APP_TOKEN)
         await handler.start_async()
 
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    loop.run_until_complete(start_bot())
+    asyncio.run(start_bot())
 
 # Flask route for health check
 @app.route('/')
 def health_check():
     return jsonify({"status": "healthy"}), 200
+
+# Flask route to handle Slack events
+@app.route('/slack/events', methods=['POST'])
+async def slack_events():
+    try:
+        # Verify the request is coming from Slack
+        slack_app.verify_signature(request.headers, request.get_data())
+        
+        # Process the event
+        event_data = request.json
+        if event_data.get('type') == 'url_verification':
+            return jsonify({"challenge": event_data["challenge"]})
+        
+        # Handle the event asynchronously
+        asyncio.create_task(slack_app.handle_event(event_data))
+        
+        return "", 200
+    except Exception as e:
+        logger.error(f"Error handling Slack event: {e}")
+        return jsonify({"error": "Internal Server Error"}), 500
 
 # Flask route to start the Slack bot
 @app.route('/start-bot', methods=['POST'])
@@ -212,5 +230,9 @@ def start_bot():
     else:
         return jsonify({"message": "Slack bot is already running"}), 200
 
+# This is needed for Vercel
+app.run = lambda: None
+
+# For local testing
 if __name__ == "__main__":
     app.run(debug=True)
