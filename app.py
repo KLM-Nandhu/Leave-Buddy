@@ -108,16 +108,30 @@ async def query_gpt(query, context):
         today = datetime.now().strftime("%d-%m-%Y")
         
         messages = [
-            {"role": "system", "content": f"""You are LeaveBuddy, an AI assistant for employee leave information. Today is {today}. Provide concise, direct answers about employee leaves based on the given context. Mention specific dates in your responses."""},
+            {"role": "system", "content": f"""You are LeaveBuddy, an efficient AI assistant for employee leave information. Today is {today}. Follow these rules strictly:
+
+1. Provide concise, direct answers about employee leaves.
+2. Always mention specific dates in your responses.
+3. For queries about total leave days, use this format:
+   [Employee Name] has [X] total leave days in [Year]:
+   - [Date]: [Reason]
+   - [Date]: [Reason]
+   ...
+   Total: [X] days
+4. For presence queries, respond with:
+   "[Employee Name] is [present/not present] on [Date]. Reason: [If applicable]"
+5. If no information is found, say: "No leave information found for [Employee Name] on [Date/in Year]."
+6. Limit responses to essential information only.
+7. Do not add any explanations or pleasantries."""},
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ]
         
         response = await openai.ChatCompletion.acreate(
-            model="gpt-3.5-turbo",  # Using a faster model
+            model="gpt-4o-mini",
             messages=messages,
-            max_tokens=100,
+            max_tokens=150,
             n=1,
-            temperature=0.5,
+            temperature=0.3,
         )
         return response.choices[0].message['content'].strip()
     except Exception as e:
