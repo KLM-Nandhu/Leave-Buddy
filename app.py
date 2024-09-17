@@ -1,17 +1,14 @@
 import os
 import openai
 from pinecone import Pinecone, ServerlessSpec
-from slack_bolt.async_app import AsyncApp
-from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
-import asyncio
-import time
+from slack_bolt import App
+from slack_bolt.adapter.flask import SlackRequestHandler
+from flask import Flask, request
 import logging
-from threading import Thread
-import traceback
-from slack_sdk.errors import SlackApiError
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import lru_cache
 import pandas as pd
+import traceback
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -21,10 +18,10 @@ logger = logging.getLogger(__name__)
 openai.api_key = os.environ.get("OPENAI_API_KEY")
 PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
 SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
+SLACK_SIGNING_SECRET = os.environ.get("SLACK_SIGNING_SECRET")
 
 # Check if all required environment variables are set
-required_env_vars = ["OPENAI_API_KEY", "PINECONE_API_KEY", "SLACK_BOT_TOKEN", "SLACK_APP_TOKEN"]
+required_env_vars = ["OPENAI_API_KEY", "PINECONE_API_KEY", "SLACK_BOT_TOKEN", "SLACK_SIGNING_SECRET"]
 missing_vars = [var for var in required_env_vars if not os.environ.get(var)]
 if missing_vars:
     raise EnvironmentError(f"Missing required environment variables: {', '.join(missing_vars)}")
@@ -34,7 +31,11 @@ pc = Pinecone(api_key=PINECONE_API_KEY)
 index_name = "leave-buddy-index"
 
 # Initialize Slack app
-app = AsyncApp(token=SLACK_BOT_TOKEN)
+app = App(token=SLACK_BOT_TOKEN, signing_secret=SLACK_SIGNING_SECRET)
+handler = SlackRequestHandler(app)
+
+# Initialize Flask app
+flask_app = Flask(__name__)
 
 # Cached function to generate embeddings
 @lru_cache(maxsize=1000)
@@ -79,7 +80,7 @@ def upload_to_pinecone(records):
         return False, f"Error uploading data to Pinecone: {str(e)}"
 
 # Function to query Pinecone and format response
-async def query_pinecone(query):
+def query_pinecone(query):
     try:
         index = pc.Index(index_name)
         query_embedding = get_embedding(query)
@@ -96,7 +97,7 @@ async def query_pinecone(query):
     return None
 
 # Function to query GPT and generate response
-async def query_gpt(query, context):
+def query_gpt(query, context):
     try:
         today = datetime.now().strftime("%d-%m-%Y")
         
@@ -114,9 +115,9 @@ async def query_gpt(query, context):
    Total: [X] days
 5. For presence queries:
    - If leave information is found for the date, respond with:
-     "[Employee Name] is  present on [Date]. Reason: [Leave Reason]"
+     "[Employee Name] is not present on [Date]. Reason: [Leave Reason]"
    - If no leave information is found for the date, respond with:
-     "[Employee Name] is  not present on [Date]."
+     "[Employee Name] is present on [Date]."
 6. IMPORTANT: Absence of leave information in the database means the employee is present.
 7. Only mention leave information if it's explicitly stated in the context.
 8. Limit responses to essential information only.
@@ -124,7 +125,7 @@ async def query_gpt(query, context):
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ]
         
-        response = await openai.ChatCompletion.acreate(
+        response = openai.ChatCompletion.create(
             model="gpt-4o-mini",
             messages=messages,
             max_tokens=150,
@@ -137,11 +138,11 @@ async def query_gpt(query, context):
         return f"Error: Unable to process the query. Please try again."
 
 # Function to process query and generate response
-async def process_query(query):
+def process_query(query):
     try:
-        context = await query_pinecone(query)
+        context = query_pinecone(query)
         if context:
-            response = await query_gpt(query, context)
+            response = query_gpt(query, context)
         else:
             # If no context is found, assume the employee is present
             employee_name = query.split()[1]  # Extracts the name from "is [name] present today?"
@@ -152,55 +153,36 @@ async def process_query(query):
         logger.error(f"Error in process_query: {str(e)}")
         return "I encountered an error while processing your query. Please try again later."
 
-# Enhanced Slack event handler with fixed loading message
+# Slack event handler
 @app.event("message")
-async def handle_message(event, say):
+def handle_message(body, say):
     try:
-        text = event.get("text", "")
-        channel = event.get("channel", "")
+        text = body.get("event", {}).get("text", "")
+        user = body.get("event", {}).get("user", "")
+        channel = body.get("event", {}).get("channel", "")
         
         # Send initial processing message
-        processing_message = await app.client.chat_postMessage(
-            channel=channel,
-            text="Processing your request... :hourglass_flowing_sand:"
-        )
-        
-        # Get the timestamp of the processing message
-        processing_ts = processing_message['ts']
+        processing_message = say("Processing your request... :hourglass_flowing_sand:")
         
         # Process the query
-        response = await process_query(text)
+        response = process_query(text)
         
         # Update the processing message with the final response
-        try:
-            await app.client.chat_update(
-                channel=channel,
-                ts=processing_ts,
-                text=response
-            )
-        except SlackApiError as e:
-            logger.error(f"Error updating message: {e}")
-            # If update fails, send a new message
-            await say(response)
-        
+        app.client.chat_update(
+            channel=channel,
+            ts=processing_message['ts'],
+            text=f"<@{user}> {response}"
+        )
     except Exception as e:
         logger.error(f"Error in handle_message: {str(e)}")
-        await say("I'm sorry, I encountered an error. Please try again.")
+        say("I'm sorry, I encountered an error. Please try again.")
 
-# Function to run the Slack bot
-def run_slack_bot():
-    async def start_bot():
-        handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
-        await handler.start_async()
+# Flask route for Slack events
+@flask_app.route("/slack/events", methods=["POST"])
+def slack_events():
+    return handler.handle(request)
 
-    asyncio.run(start_bot())
-
-# Main function to run the app
-async def main():
-    handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
-    await handler.start_async()
-
-# Function to update leave data (previously handled by Streamlit)
+# Function to update leave data
 def update_leave_data(file_path):
     try:
         df = pd.read_excel(file_path)
@@ -218,10 +200,11 @@ def update_leave_data(file_path):
     except Exception as e:
         print(f"Error updating leave data: {str(e)}")
 
-# Run the app
+# Health check route
+@flask_app.route("/", methods=["GET"])
+def health_check():
+    return "Leave Buddy is running!"
+
+# Run the Flask app
 if __name__ == "__main__":
-    # Uncomment the following line and provide the file path to update leave data
-    # update_leave_data("path_to_your_excel_file.xlsx")
-    
-    print("Starting Slack bot...")
-    asyncio.run(main())
+    flask_app.run(debug=True)
