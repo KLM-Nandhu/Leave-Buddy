@@ -118,11 +118,15 @@ async def query_gpt(query, context):
    - [Date]: [Reason]
    ...
    Total: [X] days
-4. For presence queries, respond with:
-   "[Employee Name] is [present/not present] on [Date]. Reason: [If applicable]"
-5. If no information is found, say: "No leave information found for [Employee Name] on [Date/in Year]."
-6. Limit responses to essential information only.
-7. Do not add any explanations or pleasantries."""},
+4. For presence queries:
+   - If leave information is found for the date, respond with:
+     "[Employee Name] is not present on [Date]. Reason: [Leave Reason]"
+   - If no leave information is found for the date, respond with:
+     "[Employee Name] is present on [Date]."
+5. IMPORTANT: Absence of leave information in the database means the employee is present.
+6. Only mention leave information if it's explicitly stated in the context.
+7. Limit responses to essential information only.
+8. Do not add any explanations or pleasantries."""},
             {"role": "user", "content": f"Context: {context}\n\nQuery: {query}"}
         ]
         
@@ -131,7 +135,7 @@ async def query_gpt(query, context):
             messages=messages,
             max_tokens=150,
             n=1,
-            temperature=0.3,
+            temperature=0.7,
         )
         return response.choices[0].message['content'].strip()
     except Exception as e:
@@ -144,20 +148,47 @@ async def process_query(query):
         context = await query_pinecone(query)
         if context:
             response = await query_gpt(query, context)
-            return response
         else:
-            return "I'm sorry, I couldn't find relevant information for your query."
+            # If no context is found, assume the employee is present
+            employee_name = query.split()[1]  # Extracts the name from "is [name] present today?"
+            today = datetime.now().strftime("%d-%m-%Y")
+            response = f"{employee_name} is present on {today}."
+        return response
     except Exception as e:
         logger.error(f"Error in process_query: {str(e)}")
         return "I encountered an error while processing your query. Please try again later."
 
-# Enhanced Slack event handler
+# Enhanced Slack event handler with fixed loading message
 @app.event("message")
 async def handle_message(event, say):
     try:
         text = event.get("text", "")
+        channel = event.get("channel", "")
+        
+        # Send initial processing message
+        processing_message = await app.client.chat_postMessage(
+            channel=channel,
+            text="Processing your request... :hourglass_flowing_sand:"
+        )
+        
+        # Get the timestamp of the processing message
+        processing_ts = processing_message['ts']
+        
+        # Process the query
         response = await process_query(text)
-        await say(response)
+        
+        # Update the processing message with the final response
+        try:
+            await app.client.chat_update(
+                channel=channel,
+                ts=processing_ts,
+                text=response
+            )
+        except SlackApiError as e:
+            logger.error(f"Error updating message: {e}")
+            # If update fails, send a new message
+            await say(response)
+        
     except Exception as e:
         logger.error(f"Error in handle_message: {str(e)}")
         await say("I'm sorry, I encountered an error. Please try again.")
