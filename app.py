@@ -20,7 +20,7 @@ logger = logging.getLogger(__name__)
 # Streamlit app title
 st.title("Leave Buddy - Slack Bot")
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
+OPENAI_API_KEY = st.secrets["OPENAI_API_KEY"]
 PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
 SLACK_BOT_TOKEN = st.secrets["SLACK_BOT_TOKEN"]
 SLACK_APP_TOKEN = st.secrets["SLACK_APP_TOKEN"]
