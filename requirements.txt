@@ -1,4 +1,6 @@
-pandas
-openai==0.28
-slack-bolt
-aiohttp  # Required for asynchronous operations in slack-bolt
+streamlit==1.22.0
+pandas==1.5.3
+openai==0.27.8
+pinecone-client==2.2.1
+slack-bolt==1.18.0
+asyncio==3.4.3
