@@ -1,4 +1,4 @@
-import streamlit as st
+from flask import Flask, request, jsonify
 import pandas as pd
 import openai
 from pinecone import Pinecone, ServerlessSpec
@@ -12,34 +12,27 @@ import traceback
 from slack_sdk.errors import SlackApiError
 from datetime import datetime, timedelta
 from functools import lru_cache
+import os
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Streamlit app title
-st.title("Leave Buddy - Slack Bot")
+# Initialize Flask app
+app = Flask(__name__)
 
-openai.api_key = st.secrets["OPENAI_API_KEY"]
-PINECONE_API_KEY = st.secrets["PINECONE_API_KEY"]
-SLACK_BOT_TOKEN = st.secrets["SLACK_BOT_TOKEN"]
-SLACK_APP_TOKEN = st.secrets["SLACK_APP_TOKEN"]
+# Load environment variables
+openai.api_key = os.environ.get("OPENAI_API_KEY")
+PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
+SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
+
 # Initialize Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
 index_name = "leave-buddy-index"
 
 # Initialize Slack app
-app = AsyncApp(token=SLACK_BOT_TOKEN)
-
-# Create a placeholder for logs
-if 'logs' not in st.session_state:
-    st.session_state.logs = ""
-log_placeholder = st.empty()
-
-# Function to update Streamlit log
-def update_log(message):
-    st.session_state.logs += message + "\n"
-    log_placeholder.text_area("Logs", st.session_state.logs, height=300)
+slack_app = AsyncApp(token=SLACK_BOT_TOKEN)
 
 # Cached function to generate embeddings
 @lru_cache(maxsize=1000)
@@ -157,15 +150,15 @@ async def process_query(query):
         logger.error(f"Error in process_query: {str(e)}")
         return "I encountered an error while processing your query. Please try again later."
 
-# Enhanced Slack event handler with fixed loading message
-@app.event("message")
+# Slack event handler
+@slack_app.event("message")
 async def handle_message(event, say):
     try:
         text = event.get("text", "")
         channel = event.get("channel", "")
         
         # Send initial processing message
-        processing_message = await app.client.chat_postMessage(
+        processing_message = await slack_app.client.chat_postMessage(
             channel=channel,
             text="Processing your request... :hourglass_flowing_sand:"
         )
@@ -178,7 +171,7 @@ async def handle_message(event, say):
         
         # Update the processing message with the final response
         try:
-            await app.client.chat_update(
+            await slack_app.client.chat_update(
                 channel=channel,
                 ts=processing_ts,
                 text=response
@@ -195,45 +188,29 @@ async def handle_message(event, say):
 # Function to run the Slack bot
 def run_slack_bot():
     async def start_bot():
-        handler = AsyncSocketModeHandler(app, SLACK_APP_TOKEN)
+        handler = AsyncSocketModeHandler(slack_app, SLACK_APP_TOKEN)
         await handler.start_async()
 
-    asyncio.run(start_bot())
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.run_until_complete(start_bot())
 
-# Sidebar for optional data upload
-st.sidebar.header("Update Leave Data")
-uploaded_file = st.sidebar.file_uploader("Upload Excel file", type="xlsx")
-if uploaded_file is not None:
-    df = pd.read_excel(uploaded_file)
-    df['DATE'] = pd.to_datetime(df['DATE']).dt.strftime('%d-%m-%Y')
-    
-    st.sidebar.write("Uploaded Data Preview:")
-    st.sidebar.dataframe(df.head())
-    
-    if st.sidebar.button("Process and Upload Data"):
-        with st.spinner("Processing and uploading data..."):
-            embeddings = create_embeddings(df)
-            success, message = upload_to_pinecone(embeddings)
-        st.sidebar.write(message)
-        if success:
-            st.session_state['data_uploaded'] = True
-            st.sidebar.success("Data processed and uploaded successfully!")
+# Flask route for health check
+@app.route('/')
+def health_check():
+    return jsonify({"status": "healthy"}), 200
 
-# Main interface for starting the Slack bot
-st.header("Slack Bot Controls")
-if 'bot_running' not in st.session_state:
-    st.session_state.bot_running = False
+# Flask route to start the Slack bot
+@app.route('/start-bot', methods=['POST'])
+def start_bot():
+    if not os.environ.get('BOT_STARTED'):
+        thread = Thread(target=run_slack_bot)
+        thread.daemon = True
+        thread.start()
+        os.environ['BOT_STARTED'] = 'true'
+        return jsonify({"message": "Slack bot started successfully"}), 200
+    else:
+        return jsonify({"message": "Slack bot is already running"}), 200
 
-if st.button("Start Slack Bot", disabled=st.session_state.bot_running):
-    st.session_state.bot_running = True
-    st.write("Starting Slack bot...")
-    thread = Thread(target=run_slack_bot)
-    thread.start()
-    st.success("Slack bot is running! You can now ask questions in your Slack channel.")
-
-if st.session_state.bot_running:
-    st.write("Slack bot is active and ready to answer queries.")
-
-# Run the Streamlit app
 if __name__ == "__main__":
-    st.write("Leave Buddy is ready to use!")
+    app.run(debug=True)
