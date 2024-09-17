@@ -1,18 +1,26 @@
+import sys
+import os
+import asyncio
 from flask import Flask, request, jsonify
-import pandas as pd
 import openai
 from pinecone import Pinecone, ServerlessSpec
 from slack_bolt.async_app import AsyncApp
 from slack_bolt.adapter.socket_mode.async_handler import AsyncSocketModeHandler
-import asyncio
-import time
 import logging
 from threading import Thread
-import traceback
 from slack_sdk.errors import SlackApiError
-from datetime import datetime, timedelta
+from datetime import datetime
 from functools import lru_cache
-import os
+from dotenv import load_dotenv
+
+# Debug information
+print("Python version:", sys.version)
+print("Python path:", sys.path)
+print("Current working directory:", os.getcwd())
+print("Contents of current directory:", os.listdir())
+
+# Load environment variables
+load_dotenv()
 
 # Set up logging
 logging.basicConfig(level=logging.INFO)
@@ -22,10 +30,10 @@ logger = logging.getLogger(__name__)
 app = Flask(__name__)
 
 # Load environment variables
-openai.api_key = os.environ.get("OPENAI_API_KEY")
-PINECONE_API_KEY = os.environ.get("PINECONE_API_KEY")
-SLACK_BOT_TOKEN = os.environ.get("SLACK_BOT_TOKEN")
-SLACK_APP_TOKEN = os.environ.get("SLACK_APP_TOKEN")
+openai.api_key = os.getenv("OPENAI_API_KEY")
+PINECONE_API_KEY = os.getenv("PINECONE_API_KEY")
+SLACK_BOT_TOKEN = os.getenv("SLACK_BOT_TOKEN")
+SLACK_APP_TOKEN = os.getenv("SLACK_APP_TOKEN")
 
 # Initialize Pinecone
 pc = Pinecone(api_key=PINECONE_API_KEY)
@@ -112,9 +120,9 @@ async def query_gpt(query, context):
    Total: [X] days
 5. For presence queries:
    - If leave information is found for the date, respond with:
-     "[Employee Name] is  present on [Date]. Reason: [Leave Reason]"
+     "[Employee Name] is not present on [Date]. Reason: [Leave Reason]"
    - If no leave information is found for the date, respond with:
-     "[Employee Name] is  not present on [Date]."
+     "[Employee Name] is present on [Date]."
 6. IMPORTANT: Absence of leave information in the database means the employee is present.
 7. Only mention leave information if it's explicitly stated in the context.
 8. Limit responses to essential information only.
@@ -123,7 +131,7 @@ async def query_gpt(query, context):
         ]
         
         response = await openai.ChatCompletion.acreate(
-            model="gpt-4-0613",
+            model="gpt-4-1106-preview",
             messages=messages,
             max_tokens=150,
             n=1,
@@ -196,7 +204,7 @@ def run_slack_bot():
 # Flask route for health check
 @app.route('/')
 def health_check():
-    return jsonify({"status": "healthy"}), 200
+    return jsonify({"status": "healthy", "python_version": sys.version}), 200
 
 # Flask route to handle Slack events
 @app.route('/slack/events', methods=['POST'])
