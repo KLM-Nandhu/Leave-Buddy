@@ -3,5 +3,4 @@ pandas
 openai
 pinecone-client
 slack_bolt
-asyncio
-gunicorn
+python-dotenv
